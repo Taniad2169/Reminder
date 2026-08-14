@@ -11,6 +11,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 
 <title>Quick Reminder</title>
 <style>
@@ -940,10 +941,15 @@ let messaging = null;
 let fcmToken = null;
 let db = null; // Firestore — lets the server-side function see reminders & fire them even if this phone is asleep
 
+async function ensureSignedIn() {
+  if (!firebase.auth().currentUser) await firebase.auth().signInAnonymously();
+}
+
 // Push one reminder up to Firestore so the server-side scheduled function can fire it
 async function pushReminderToCloud(r) {
   if (!db) return;
   try {
+    await ensureSignedIn();
     const target = new Date(r.date + 'T' + r.time + ':00');
     await db.collection('reminders').doc(r.id).set({
       id: r.id,
@@ -960,7 +966,7 @@ async function pushReminderToCloud(r) {
 // Remove a reminder from Firestore
 async function deleteReminderFromCloud(id) {
   if (!db) return;
-  try { await db.collection('reminders').doc(id).delete(); }
+  try { await ensureSignedIn(); await db.collection('reminders').doc(id).delete(); }
   catch (e) { console.log('Cloud delete failed:', e); }
 }
 
@@ -968,6 +974,7 @@ async function deleteReminderFromCloud(id) {
 async function saveTokenToCloud(token) {
   if (!db || !token) return;
   try {
+    await ensureSignedIn();
     await db.collection('device').doc('main').set({
       fcmToken: token,
       updatedAt: Date.now()
@@ -983,6 +990,7 @@ function initFirebase() {
     firebase.initializeApp(firebaseConfig);
     messaging = firebase.messaging();
     db = firebase.firestore();
+    firebase.auth().signInAnonymously().catch(error => console.error('Anonymous sign-in failed:', error));
     console.log('✓ Firebase initialized');
     console.log('Project:', firebaseConfig.projectId);
     
@@ -1016,7 +1024,8 @@ async function getFCMToken() {
   
   try {
     const token = await messaging.getToken({
-      vapidKey: 'BNp24uSCSixj-olMLMkO4I1jWjr2A0E8R8YRRqGQ5bDYuWeWa6Hu3oSTV1GPHj89ln8bz3-lzYeoqCAgPEcbvjo' // Get from Firebase Console → Project Settings → Cloud Messaging
+      vapidKey: 'BNp24uSCSixj-olMLMkO4I1jWjr2A0E8R8YRRqGQ5bDYuWeWa6Hu3oSTV1GPHj89ln8bz3-lzYeoqCAgPEcbvjo',
+      serviceWorkerRegistration: swRegistration
     });
     
     if (token) {
@@ -1072,13 +1081,6 @@ if ('serviceWorker' in navigator) {
     })
     .catch(err => console.log('Service Worker failed:', err));
 
-  // Register Firebase messaging service worker separately (required by FCM)
-  navigator.serviceWorker.register('./firebase-messaging-sw.js', { scope: './' })
-    .then(reg => {
-      console.log('✓ Firebase Messaging SW registered');
-    })
-    .catch(err => console.log('Firebase SW failed:', err));
-  
   // Listen for messages from SW (notification actions)
   navigator.serviceWorker.addEventListener('message', event => {
     const msg = event.data;
